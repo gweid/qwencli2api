@@ -24,13 +24,13 @@ pip install -r requirements.txt
 # 设置环境变量（可选）
 export PORT=${PORT:-3008}
 export HOST=${HOST:-0.0.0.0}
-export API_PASSWORD=${API_PASSWORD:-sk-123456}
+export API_PASSWORD=${API_PASSWORD:-qwen123}
 export DATABASE_URL=${DATABASE_URL:-data/tokens.db}
 export DEBUG=${DEBUG:-false}
 
 echo "启动服务器..."
 echo "访问地址: http://localhost:$PORT"
-echo "默认密码: sk-123456"
+echo "默认密码: qwen123"
 echo "按 Ctrl+C 停止服务器"
 
 # 运行服务器

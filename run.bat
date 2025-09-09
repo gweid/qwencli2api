@@ -28,13 +28,13 @@ pip install -r requirements.txt
 REM 设置环境变量（可选）
 if not defined PORT set PORT=3008
 if not defined HOST set HOST=0.0.0.0
-if not defined API_PASSWORD set API_PASSWORD=sk-123456
+if not defined API_PASSWORD set API_PASSWORD=qwen123
 if not defined DATABASE_URL set DATABASE_URL=data/tokens.db
 if not defined DEBUG set DEBUG=false
 
 echo 启动服务器...
 echo 访问地址: http://localhost:%PORT%
-echo 默认密码: sk-123456
+echo 默认密码: qwen123
 echo 按 Ctrl+C 停止服务器
 
 REM 运行服务器

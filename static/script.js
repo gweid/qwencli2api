@@ -18,6 +18,20 @@ document.addEventListener('DOMContentLoaded', function() {
     const apiResponse = document.getElementById('api-response');
     const responseContent = document.getElementById('response-content');
     const statusContainer = document.getElementById('status-container');
+    const totalTokensToday = document.getElementById('total-tokens-today');
+    const totalCallsToday = document.getElementById('total-calls-today');
+    const modelUsageDetails = document.getElementById('model-usage-details');
+    const tokenUsageStatus = document.getElementById('token-usage-status');
+    const usageDateInput = document.getElementById('usage-date');
+    const queryUsageBtn = document.getElementById('query-usage-btn');
+    const deleteUsageBtn = document.getElementById('delete-usage-btn');
+    
+    const datePickerBtn = document.getElementById('date-picker-btn');
+    const datePickerDropdown = document.getElementById('date-picker-dropdown');
+    const prevMonthBtn = document.getElementById('prev-month');
+    const nextMonthBtn = document.getElementById('next-month');
+    const currentMonthYear = document.getElementById('current-month-year');
+    const calendarDays = document.getElementById('calendar-days');
     
     const oauthLoginBtn = document.getElementById('oauth-login-btn');
     const oauthStatus = document.getElementById('oauth-status');
@@ -32,14 +46,11 @@ document.addEventListener('DOMContentLoaded', function() {
     let oauthCountdownTimer = null;
     let oauthExpiresAt = null;
     
-    // 检查 localStorage 中是否有保存的密码
-    const savedPassword = localStorage.getItem('API_PASSWORD');
-    if (savedPassword) {
-        // 自动登录验证
-        autoLogin(savedPassword);
-    }
+    let currentDate = new Date();
+    let selectedDate = null;
+    let availableDates = new Set();
+    let isDatePickerOpen = false;
     
-    // 登录功能
     loginBtn.addEventListener('click', async function() {
         const password = passwordInput.value;
         
@@ -66,18 +77,96 @@ document.addEventListener('DOMContentLoaded', function() {
             if (response.ok) {
                 showStatus(loginStatus, '登录成功', 'success');
                 userPassword = password;
-                // 保存密码到 localStorage
-                localStorage.setItem('API_PASSWORD', password);
                 loginSection.classList.add('hidden');
                 mainSection.classList.remove('hidden');
                 checkTokenStatus();
+                loadVersion();
+                
+                const today = new Date();
+                const yyyy = today.getFullYear();
+                const mm = String(today.getMonth() + 1).padStart(2, '0');
+                const dd = String(today.getDate()).padStart(2, '0');
+                const todayString = `${yyyy}-${mm}-${dd}`;
+                
+                selectedDate = todayString;
+                usageDateInput.value = todayString;
+                
+                initCustomDatePicker();
+                loadAvailableDates();
+                
+                checkTokenUsage(todayString);
+                
+                if (queryUsageBtn) {
+                    queryUsageBtn.addEventListener('click', async function() {
+                        const selectedDate = usageDateInput.value;
+                        if (!selectedDate) {
+                            addStatusMessage('请选择日期', 'error', 3000);
+                            return;
+                        }
+                        queryUsageBtn.disabled = true;
+                        queryUsageBtn.textContent = '查询中...';
+                        try {
+                            await checkTokenUsage(selectedDate);
+                            addStatusMessage(`已加载 ${selectedDate} 的用量数据`, 'success', 3000);
+                        } catch (error) {
+                            addStatusMessage('查询失败: ' + error.message, 'error', 3000);
+                        } finally {
+                            queryUsageBtn.disabled = false;
+                            queryUsageBtn.textContent = '查询';
+                        }
+                    });
+                }
+                
+                if (deleteUsageBtn) {
+                    deleteUsageBtn.addEventListener('click', async function() {
+                        const selectedDate = usageDateInput.value;
+                        if (!selectedDate) {
+                            addStatusMessage('请选择要删除的日期', 'error', 3000);
+                            return;
+                        }
+                        
+                        showConfirmDialog(
+                            `确定要删除 ${selectedDate} 的用量数据吗？此操作不可撤销。`,
+                            async function() {
+                                deleteUsageBtn.disabled = true;
+                                deleteUsageBtn.textContent = '删除中...';
+                                try {
+                                    const response = await fetch('/api/statistics/usage', {
+                                        method: 'DELETE',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'Authorization': 'Bearer ' + userPassword,
+                                        },
+                                        body: JSON.stringify({ date: selectedDate }),
+                                    });
+                                    
+                                    const data = await response.json();
+                                    
+                                    if (response.ok) {
+                                        addStatusMessage(data.message || '删除成功', 'success', 3000);
+                                        await checkTokenUsage(selectedDate);
+                                        await loadAvailableDates();
+                                    } else {
+                                        addStatusMessage(data.error || '删除失败', 'error', 3000);
+                                    }
+                                } catch (error) {
+                                    addStatusMessage('网络错误: ' + error.message, 'error', 3000);
+                                } finally {
+                                    deleteUsageBtn.disabled = false;
+                                    deleteUsageBtn.textContent = '删除';
+                                }
+                            },
+                            null,
+                            "删除用量数据"
+                        );
+                    });
+                }
+
                 setTimeout(() => {
                     loginStatus.style.display = 'none';
                 }, 3000);
             } else {
-                showStatus(loginStatus, data.error || '登录失败', 'error');
-                // 登录失败时清除保存的密码
-                localStorage.removeItem('API_PASSWORD');
+                showStatus(loginStatus, data.detail || '登录失败', 'error');
             }
         } catch (error) {
             showStatus(loginStatus, '网络错误: ' + error.message, 'error');
@@ -87,7 +176,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // 文件上传功能
     if (dropZone && fileInput) {
         dropZone.addEventListener('click', function() { fileInput.click(); });
         
@@ -116,7 +204,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // OAuth 登录按钮事件
     if (oauthLoginBtn) {
         oauthLoginBtn.addEventListener('click', startOAuthLogin);
     }
@@ -130,7 +217,6 @@ document.addEventListener('DOMContentLoaded', function() {
         manualOpenBtn.disabled = true;
     }
     
-    // 处理文件上传
     async function handleFileUpload(file) {
         if (!uploadStatus) return;
         
@@ -170,34 +256,25 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (error) {
             showStatus(uploadStatus, '文件处理错误: ' + error.message, 'error');
         } finally {
-            // 无论成功还是失败，都重置文件输入
             resetFileInput();
         }
     }
     
-    // 重置文件输入元素
     function resetFileInput() {
         if (fileInput) {
-            // 方法1: 清空值
             fileInput.value = '';
-            
-            // 强制触发重新渲染，确保状态完全重置
             fileInput.blur();
             fileInput.focus();
         }
     }
     
-    // 重新绑定文件输入事件（解决某些浏览器中的问题）
     function rebindFileInputEvents() {
         if (fileInput) {
-            // 移除旧的事件监听器（如果存在）
             const newFileInput = fileInput.cloneNode(true);
             fileInput.parentNode.replaceChild(newFileInput, fileInput);
             
-            // 更新引用
             window.fileInput = newFileInput;
             
-            // 重新绑定事件
             newFileInput.addEventListener('change', function(e) {
                 if (e.target.files.length) {
                     handleFileUpload(e.target.files[0]);
@@ -206,7 +283,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 开始 OAuth 登录流程
     async function startOAuthLogin() {
         if (!oauthLoginBtn || !oauthStatus || !oauthDetails || !oauthInstructions) return;
         
@@ -236,7 +312,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 try {
                     window.open(data.verificationUriComplete, '_blank');
                 } catch (e) {
-                    // 自动打开授权页面失败
                 }
                 
                 const expiresAt = new Date(oauthExpiresAt);
@@ -283,7 +358,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 开始轮询 OAuth 状态
     function startOAuthPolling() {
         if (!oauthStateId) return;
         
@@ -291,7 +365,6 @@ document.addEventListener('DOMContentLoaded', function() {
         oauthPollTimer = setInterval(pollOAuthStatus, 3000);
     }
     
-    // 开始倒计时
     function startOAuthCountdown() {
         if (!oauthExpiresAt || !oauthStatus) return;
         
@@ -299,7 +372,6 @@ document.addEventListener('DOMContentLoaded', function() {
         oauthCountdownTimer = setInterval(updateCountdown, 1000);
     }
     
-    // 更新倒计时显示
     function updateCountdown() {
         if (!oauthExpiresAt || !oauthStatus) return;
         
@@ -331,7 +403,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 停止倒计时
     function stopOAuthCountdown() {
         if (oauthCountdownTimer) {
             clearInterval(oauthCountdownTimer);
@@ -339,7 +410,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 轮询 OAuth 状态
     async function pollOAuthStatus() {
         if (!oauthStateId || !oauthStatus) return;
         
@@ -377,11 +447,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 resetOAuthLogin();
             }
         } catch (error) {
-            // OAuth 轮询错误
+            console.error('Failed to load available dates:', error);
         }
     }
     
-    // 重置 OAuth 登录状态
     function resetOAuthLogin() {
         if (oauthPollTimer) {
             clearInterval(oauthPollTimer);
@@ -409,7 +478,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 取消 OAuth 登录
     async function cancelOAuthLogin() {
         if (!oauthStateId) {
             resetOAuthLogin();
@@ -435,7 +503,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 确认对话框函数
     function showConfirmDialog(message, onConfirm, onCancel, title = "确认删除") {
         const modal = document.createElement('div');
         modal.style.cssText = 
@@ -488,7 +555,6 @@ document.addEventListener('DOMContentLoaded', function() {
         };
     }
     
-    // 事件委托处理token按钮点击
     document.addEventListener('click', function(e) {
         const target = e.target;
         if (target.classList.contains('btn-refresh')) {
@@ -513,7 +579,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // 检查token状态
     async function checkTokenStatus() {
         if (!tokenStatus || !refreshTokenBtn) return;
         
@@ -530,18 +595,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.tokens && data.tokens.length > 0) {
                     tokenListHtml = '<div class="token-list-wrapper"><div class="token-list">';
                     data.tokens.forEach(function(token) {
-                        const expiresAt = token.expiresAt ? new Date(token.expiresAt).toLocaleString() : '未知';
+                        const expiresAt = token.expiresAtDisplay || (token.expiresAt ? new Date(token.expiresAt).toLocaleString() : '未知');
+                        const uploadedAt = token.uploadedAtDisplay || (token.uploadedAt ? new Date(token.uploadedAt).toLocaleString() : '未知');
                         const status = token.isExpired ? '已过期' : '有效';
                         const statusClass = token.isExpired ? 'status-expired' : 'status-valid';
                         const refreshInfo = token.wasRefreshed ? ' (已自动刷新)' : (token.refreshFailed ? ' (刷新失败)' : '');
                         tokenListHtml += '<div class="token-card" data-token-id="' + encodeURIComponent(token.id) + '">';
                         tokenListHtml += '<div class="token-header">';
                         tokenListHtml += '<div class="token-id">🔑 ' + token.id + '</div>';
+                        tokenListHtml += '<div class="token-header-badges">';
+                        tokenListHtml += `<div class="token-status status-usage">使用: ${token.usageCount.toLocaleString()}</div>`;
                         tokenListHtml += '<div class="token-status ' + statusClass + '">' + status + '</div>';
-                        tokenListHtml += '</div>';
+                        tokenListHtml += '</div>'; // close token-header-badges
+                        tokenListHtml += '</div>'; // close token-header
                         tokenListHtml += '<div class="token-details">';
                         tokenListHtml += '<div><strong>过期时间:</strong> ' + expiresAt + '</div>';
-                        tokenListHtml += '<div><strong>上传时间:</strong> ' + new Date(token.uploadedAt).toLocaleString() + '</div>';
+                        tokenListHtml += '<div><strong>上传时间:</strong> ' + uploadedAt + '</div>';
                         if (refreshInfo) {
                             tokenListHtml += '<div><strong>状态:</strong> ' + refreshInfo + '</div>';
                         }
@@ -555,7 +624,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     tokenListHtml += '</div></div>';
                 }
                 
-                tokenStatus.innerHTML = '<div class="token-info"><strong>🔢 Token总数:</strong> ' + data.tokenCount + '<br><strong>📊 Token状态:</strong> 有效</div>' + tokenListHtml;
+                let headerHtml = '<div class="token-summary-badges">';
+                headerHtml += `<div class="token-status status-info">🔢 Token总数: ${data.tokenCount}</div>`;
+                headerHtml += '<div class="token-status status-valid">📊 状态: 有效</div>';
+                headerHtml += '</div>';
+
+                tokenStatus.innerHTML = headerHtml + tokenListHtml;
                 tokenStatus.style.display = 'block';
                 
                 const tokenStatusButtons = document.querySelector('.token-status-buttons');
@@ -583,7 +657,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 刷新token
     if (refreshTokenBtn && refreshStatus) {
         refreshTokenBtn.addEventListener('click', async function() {
             addStatusMessage('正在强制刷新所有Token...', 'info', 5000);
@@ -609,7 +682,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // 删除所有Token
     if (deleteAllTokensBtn) {
         deleteAllTokensBtn.addEventListener('click', async function() {
             showConfirmDialog(
@@ -642,7 +714,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // 发送API请求
     if (sendBtn && apiStatus && apiResponse && responseContent && messageInput && modelSelect) {
         sendBtn.addEventListener('click', async function() {
             const message = messageInput.value.trim();
@@ -680,6 +751,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     showStatus(apiStatus, '请求成功', 'success');
                     responseContent.textContent = JSON.stringify(data, null, 2);
                     apiResponse.classList.remove('hidden');
+                    checkTokenUsage();
+                    loadAvailableDates();
                 } else {
                     showStatus(apiStatus, data.error || '请求失败', 'error');
                 }
@@ -688,8 +761,51 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+
+    async function checkTokenUsage(date = null) {
+        if (!totalTokensToday || !modelUsageDetails || !tokenUsageStatus) return;
+
+        try {
+            const url = date ? `/api/statistics/usage?date=${date}` : '/api/statistics/usage';
+            const response = await fetch(url, {
+                headers: {
+                    'Authorization': 'Bearer ' + userPassword
+                }
+            });
+            const data = await response.json();
+
+            if (response.ok) {
+                document.getElementById('total-tokens-today').textContent = data.total_tokens_today.toLocaleString();
+                document.getElementById('total-calls-today').textContent = data.total_calls_today.toLocaleString();
+
+                let detailsHtml = '';
+                if (Object.keys(data.models).length > 0) {
+                    detailsHtml = '<div class="token-list">';
+                    for (const [model, usage] of Object.entries(data.models)) {
+                        detailsHtml += `
+                            <div class="token-card usage-stats-card">
+                                <div class="usage-model-name">${model}</div>
+                                <div class="usage-stats-badges">
+                                    <div class="token-status status-tokens">Tokens: ${usage.total_tokens.toLocaleString()}</div>
+                                    <div class="token-status status-calls">调用: ${usage.call_count.toLocaleString()}</div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    detailsHtml += '</div>';
+                } else {
+                    detailsHtml = '<p>暂无分模型用量数据。</p>';
+                }
+                modelUsageDetails.innerHTML = detailsHtml;
+                tokenUsageStatus.style.display = 'none';
+            } else {
+                showStatus(tokenUsageStatus, data.error || '获取用量失败', 'error');
+            }
+        } catch (error) {
+            showStatus(tokenUsageStatus, '网络错误: ' + error.message, 'error');
+        }
+    }
     
-    // 刷新单个token
     async function refreshSingleToken(tokenId) {
         const card = document.querySelector('[data-token-id="' + encodeURIComponent(tokenId) + '"]');
         if (!card) return;
@@ -744,7 +860,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 删除单个token
     async function deleteSingleToken(tokenId) {
         const card = document.querySelector('[data-token-id="' + encodeURIComponent(tokenId) + '"]');
         if (!card) return;
@@ -791,22 +906,18 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 状态消息队列管理
     const statusQueue = [];
     let statusTimeouts = new Map();
     
-    // 显示状态信息
     function showStatus(element, message, type) {
         if (!element) return;
         
-        // 处理需要显示为浮动状态的消息
         if ((element.id === 'token-status' || element.id === 'refresh-status') && 
             (message.includes('刷新') || message.includes('删除') || message.includes('成功') || message.includes('失败'))) {
             addStatusMessage(message, type, 5000);
             return;
         }
         
-        // 处理普通状态元素
         if (element.hideTimeout) {
             clearTimeout(element.hideTimeout);
         }
@@ -827,27 +938,21 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 添加状态消息到队列
     function addStatusMessage(message, type, duration = 5000) {
         if (!statusContainer) return;
         
-        // 显示容器
         statusContainer.style.display = 'flex';
         
-        // 创建新的状态元素
         const statusElement = document.createElement('div');
         statusElement.className = 'status floating ' + type;
         statusElement.textContent = message;
         statusElement.style.display = 'block';
         
-        // 添加到容器
         statusContainer.appendChild(statusElement);
         
-        // 添加到队列
         const messageId = Date.now() + Math.random();
         statusQueue.push({ id: messageId, element: statusElement });
         
-        // 设置超时自动移除
         const timeoutId = setTimeout(() => {
             removeStatusMessage(messageId);
         }, duration);
@@ -855,76 +960,282 @@ document.addEventListener('DOMContentLoaded', function() {
         statusTimeouts.set(messageId, timeoutId);
     }
     
-    // 移除状态消息
     function removeStatusMessage(messageId) {
         const messageIndex = statusQueue.findIndex(msg => msg.id === messageId);
         if (messageIndex === -1) return;
         
         const message = statusQueue[messageIndex];
         
-        // 清除超时
         if (statusTimeouts.has(messageId)) {
             clearTimeout(statusTimeouts.get(messageId));
             statusTimeouts.delete(messageId);
         }
         
-        // 添加移除动画
         message.element.classList.add('removing');
         
-        // 动画完成后移除元素
         setTimeout(() => {
             if (message.element.parentNode) {
                 message.element.parentNode.removeChild(message.element);
             }
             
-            // 从队列中移除
             statusQueue.splice(messageIndex, 1);
             
-            // 如果队列为空，隐藏容器
             if (statusQueue.length === 0) {
                 statusContainer.style.display = 'none';
             }
         }, 300);
     }
-    
-    // 自动登录函数
-    async function autoLogin(password) {
+
+    async function loadVersion() {
+        const versionElement = document.getElementById('current-version');
+        if (!versionElement) return;
+        
         try {
-            const response = await fetch('/api/login', {
-                method: 'POST',
+            const response = await fetch('/api/version', {
                 headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ password }),
+                    'Authorization': 'Bearer ' + userPassword
+                }
             });
             
-            const data = await response.json();
-            
             if (response.ok) {
-                // 自动登录成功
-                userPassword = password;
-                loginSection.classList.add('hidden');
-                mainSection.classList.remove('hidden');
-                checkTokenStatus();
+                const data = await response.json();
+                versionElement.textContent = data.version;
             } else {
-                // 自动登录失败，清除保存的密码
-                localStorage.removeItem('API_PASSWORD');
-                showStatus(loginStatus, '自动登录失败，请重新登录', 'error');
+                versionElement.textContent = '获取失败';
             }
         } catch (error) {
-            // 网络错误，清除保存的密码
-            localStorage.removeItem('API_PASSWORD');
-            showStatus(loginStatus, '自动登录失败: ' + error.message, 'error');
+            console.error('获取版本号失败:', error);
+            versionElement.textContent = '获取失败';
         }
     }
     
-    // 添加退出登录功能（可选）
-    window.logout = function() {
-        localStorage.removeItem('API_PASSWORD');
-        userPassword = '';
-        loginSection.classList.remove('hidden');
-        mainSection.classList.add('hidden');
-        passwordInput.value = '';
-        showStatus(loginStatus, '已退出登录', 'info');
-    };
+    async function loadAvailableDates() {
+        try {
+            const response = await fetch('/api/statistics/available-dates', {
+                headers: {
+                    'Authorization': 'Bearer ' + userPassword
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                availableDates.clear();
+                data.dates.forEach(date => availableDates.add(date));
+                if (isDatePickerOpen) {
+                    renderCalendar();
+                }
+            }
+        } catch (error) {
+        }
+    }
+
+    function initCustomDatePicker() {
+        if (usageDateInput) {
+            usageDateInput.addEventListener('click', toggleDatePicker);
+            usageDateInput.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                toggleDatePicker();
+            });
+        }
+        if (datePickerBtn) {
+            datePickerBtn.addEventListener('click', toggleDatePicker);
+            datePickerBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                toggleDatePicker();
+            });
+        }
+
+        if (prevMonthBtn) {
+            prevMonthBtn.addEventListener('click', () => {
+                currentDate.setMonth(currentDate.getMonth() - 1);
+                renderCalendar();
+            });
+            prevMonthBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                currentDate.setMonth(currentDate.getMonth() - 1);
+                renderCalendar();
+            });
+        }
+        if (nextMonthBtn) {
+            nextMonthBtn.addEventListener('click', () => {
+                currentDate.setMonth(currentDate.getMonth() + 1);
+                renderCalendar();
+            });
+            nextMonthBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                currentDate.setMonth(currentDate.getMonth() + 1);
+                renderCalendar();
+            });
+        }
+
+        document.addEventListener('click', (event) => {
+            if (!event.target.closest('.custom-date-picker')) {
+                closeDatePicker();
+            }
+        });
+        
+        document.addEventListener('touchstart', (event) => {
+            if (!event.target.closest('.custom-date-picker') && isDatePickerOpen) {
+                closeDatePicker();
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            if (isDatePickerOpen) {
+                adjustDatePickerPosition();
+            }
+        });
+
+        renderCalendar();
+    }
+
+    function toggleDatePicker() {
+        if (isDatePickerOpen) {
+            closeDatePicker();
+        } else {
+            openDatePicker();
+        }
+    }
+
+    function openDatePicker() {
+        if (datePickerDropdown) {
+            datePickerDropdown.classList.remove('hidden');
+            isDatePickerOpen = true;
+            
+            adjustDatePickerPosition();
+            
+            renderCalendar();
+        }
+    }
+
+    function adjustDatePickerPosition() {
+        if (!datePickerDropdown || !usageDateInput) return;
+        
+        const rect = usageDateInput.getBoundingClientRect();
+        const viewportWidth = window.innerWidth;
+        const dropdownWidth = 320;
+        
+        datePickerDropdown.style.left = '';
+        datePickerDropdown.style.right = '';
+        datePickerDropdown.style.width = '';
+        
+        if (rect.left + dropdownWidth > viewportWidth - 20) {
+            datePickerDropdown.style.left = 'auto';
+            datePickerDropdown.style.right = '0';
+        }
+        
+        if (viewportWidth <= 480) {
+            datePickerDropdown.style.left = '-5px';
+            datePickerDropdown.style.right = '-5px';
+            datePickerDropdown.style.width = 'calc(100% + 10px)';
+        } else if (viewportWidth <= 768) {
+            datePickerDropdown.style.left = '0';
+            datePickerDropdown.style.right = '0';
+            datePickerDropdown.style.width = '100%';
+        }
+    }
+
+    function closeDatePicker() {
+        if (datePickerDropdown) {
+            datePickerDropdown.classList.add('hidden');
+            isDatePickerOpen = false;
+        }
+    }
+
+    function renderCalendar() {
+        if (!currentMonthYear || !calendarDays) return;
+
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth();
+        
+        const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', 
+                           '7月', '8月', '9月', '10月', '11月', '12月'];
+        currentMonthYear.textContent = `${year}年 ${monthNames[month]}`;
+
+        calendarDays.innerHTML = '';
+
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+        const firstDayOfWeek = firstDay.getDay();
+        const daysInMonth = lastDay.getDate();
+
+        const prevMonth = new Date(year, month - 1, 0);
+        for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+            const day = prevMonth.getDate() - i;
+            const dayElement = createDayElement(day, true);
+            calendarDays.appendChild(dayElement);
+        }
+
+        for (let day = 1; day <= daysInMonth; day++) {
+            const dayElement = createDayElement(day, false);
+            calendarDays.appendChild(dayElement);
+        }
+
+        const totalCells = calendarDays.children.length;
+        const remainingCells = 42 - totalCells;
+        for (let day = 1; day <= remainingCells; day++) {
+            const dayElement = createDayElement(day, true);
+            calendarDays.appendChild(dayElement);
+        }
+    }
+
+    function createDayElement(day, isOtherMonth) {
+        const dayElement = document.createElement('div');
+        dayElement.className = 'calendar-day';
+        dayElement.textContent = day;
+
+        if (isOtherMonth) {
+            dayElement.classList.add('other-month');
+            return dayElement;
+        }
+
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth();
+        const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+        const today = new Date();
+        if (year === today.getFullYear() && month === today.getMonth() && day === today.getDate()) {
+            dayElement.classList.add('today');
+        }
+
+        if (selectedDate === dateString) {
+            dayElement.classList.add('selected');
+        }
+
+        if (availableDates.has(dateString)) {
+            dayElement.classList.add('has-data');
+        }
+
+        dayElement.addEventListener('click', () => {
+            selectDate(dateString);
+        });
+        
+        dayElement.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            dayElement.style.transform = 'scale(0.95)';
+            setTimeout(() => {
+                dayElement.style.transform = '';
+                selectDate(dateString);
+            }, 100);
+        });
+
+        return dayElement;
+    }
+
+    function selectDate(dateString) {
+        selectedDate = dateString;
+        usageDateInput.value = dateString;
+        renderCalendar();
+        closeDatePicker();
+        
+        checkTokenUsage(dateString);
+    }
+
+    function formatDateForDisplay(dateString) {
+        const date = new Date(dateString + 'T00:00:00');
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
 });

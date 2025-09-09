@@ -3,28 +3,17 @@ version: '3.8'
 services:
   qwen-api:
     build: .
-    container_name: qwen-cli-api-server
+    image: ghcr.io/water008/qwenapi:latest
     ports:
-      - "${PORT:-3008}:3008"
-    environment:
-      - PORT=${PORT}
-      - HOST=${HOST}
-      - API_PASSWORD=${API_PASSWORD}
-      - DATABASE_URL=${DATABASE_URL}
-      - QWEN_OAUTH_BASE_URL=${QWEN_OAUTH_BASE_URL}
-      - QWEN_OAUTH_CLIENT_ID=${QWEN_OAUTH_CLIENT_ID}
-      - QWEN_OAUTH_SCOPE=${QWEN_OAUTH_SCOPE}
-      - QWEN_API_ENDPOINT=${QWEN_API_ENDPOINT}
-      - DEBUG=${DEBUG}
-      - LOG_LEVEL=${LOG_LEVEL}
-    env_file:
-      - .env
+      - "3008:3008"
     volumes:
       - ./data:/app/data
+    env_file:
+      - .env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3008/"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "http://localhost:3008/api/health"]
+      interval: 600s
       timeout: 10s
       retries: 3
       start_period: 40s

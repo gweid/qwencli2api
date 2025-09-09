@@ -2,15 +2,28 @@
 Configuration constants and settings for Qwen Code API Server
 """
 import os
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # 加载 .env 文件
 load_dotenv()
 
+# 时区设置
+TZ = os.getenv("TZ", "Asia/Shanghai")
+if TZ != "UTC":
+    # 设置时区环境变量
+    os.environ["TZ"] = TZ
+    try:
+        import time
+        time.tzset()
+    except (AttributeError, OSError):
+        # 在某些系统上可能不支持tzset()
+        pass
+
 # Server Configuration
 PORT = int(os.getenv("PORT", "3008"))
 HOST = os.getenv("HOST", "0.0.0.0")
-API_PASSWORD = os.getenv("API_PASSWORD", "sk-123456")  # 默认密码，生产环境应通过环境变量设置
+API_PASSWORD = os.getenv("API_PASSWORD", "qwen123")  # 默认密码，生产环境应通过环境变量设置
 DATABASE_URL = os.getenv("DATABASE_URL", "data/tokens.db")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
@@ -35,10 +48,6 @@ DATABASE_TABLE_NAME = "tokens"
 HASH_ALGORITHM = "sha256"
 PKCE_VERIFIER_LENGTH = 32
 STATE_ID_LENGTH = 32
-
-# Scheduler Configuration
-TOKEN_REFRESH_INTERVAL = int(os.getenv("TOKEN_REFRESH_INTERVAL", "30"))  # 分钟
-SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
 
 # Web Interface Configuration
 HTML_TEMPLATE_PATH = "templates/index.html"
