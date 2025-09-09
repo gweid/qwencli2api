@@ -3,7 +3,7 @@ version: '3.8'
 services:
   qwen-api:
     build: .
-    image: ghcr.io/water008/qwenapi:latest
+    container_name: qwen-cli-api-server
     ports:
       - "3008:3008"
     volumes:
