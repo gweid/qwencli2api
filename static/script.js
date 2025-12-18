@@ -51,6 +51,124 @@ document.addEventListener('DOMContentLoaded', function() {
     let availableDates = new Set();
     let isDatePickerOpen = false;
     
+    // 页面加载时尝试自动登录
+    async function tryAutoLogin() {
+        const savedPassword = localStorage.getItem('qwen_password');
+        if (savedPassword) {
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: savedPassword }),
+                });
+                
+                if (response.ok) {
+                    userPassword = savedPassword;
+                    loginSection.classList.add('hidden');
+                    mainSection.classList.remove('hidden');
+                    checkTokenStatus();
+                    loadVersion();
+                    
+                    const today = new Date();
+                    const yyyy = today.getFullYear();
+                    const mm = String(today.getMonth() + 1).padStart(2, '0');
+                    const dd = String(today.getDate()).padStart(2, '0');
+                    const todayString = `${yyyy}-${mm}-${dd}`;
+                    
+                    selectedDate = todayString;
+                    usageDateInput.value = todayString;
+                    
+                    initCustomDatePicker();
+                    loadAvailableDates();
+                    checkTokenUsage(todayString);
+                    setupEventListeners();
+                } else {
+                    // 密码无效，清除 localStorage
+                    localStorage.removeItem('qwen_password');
+                }
+            } catch (error) {
+                // 自动登录失败，清除 localStorage
+                localStorage.removeItem('qwen_password');
+            }
+        }
+    }
+    
+    // 设置事件监听器
+    function setupEventListeners() {
+        if (queryUsageBtn && !queryUsageBtn.hasAttribute('data-listener')) {
+            queryUsageBtn.setAttribute('data-listener', 'true');
+            queryUsageBtn.addEventListener('click', async function() {
+                const selectedDate = usageDateInput.value;
+                if (!selectedDate) {
+                    addStatusMessage('请选择日期', 'error', 3000);
+                    return;
+                }
+                queryUsageBtn.disabled = true;
+                queryUsageBtn.textContent = '查询中...';
+                try {
+                    await checkTokenUsage(selectedDate);
+                    addStatusMessage(`已加载 ${selectedDate} 的用量数据`, 'success', 3000);
+                } catch (error) {
+                    addStatusMessage('查询失败: ' + error.message, 'error', 3000);
+                } finally {
+                    queryUsageBtn.disabled = false;
+                    queryUsageBtn.textContent = '查询';
+                }
+            });
+        }
+        
+        if (deleteUsageBtn && !deleteUsageBtn.hasAttribute('data-listener')) {
+            deleteUsageBtn.setAttribute('data-listener', 'true');
+            deleteUsageBtn.addEventListener('click', async function() {
+                const selectedDate = usageDateInput.value;
+                if (!selectedDate) {
+                    addStatusMessage('请选择要删除的日期', 'error', 3000);
+                    return;
+                }
+                
+                showConfirmDialog(
+                    `确定要删除 ${selectedDate} 的用量数据吗？此操作不可撤销。`,
+                    async function() {
+                        deleteUsageBtn.disabled = true;
+                        deleteUsageBtn.textContent = '删除中...';
+                        try {
+                            const response = await fetch('/api/statistics/usage', {
+                                method: 'DELETE',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': 'Bearer ' + userPassword,
+                                },
+                                body: JSON.stringify({ date: selectedDate }),
+                            });
+                            
+                            const data = await response.json();
+                            
+                            if (response.ok) {
+                                addStatusMessage(data.message || '删除成功', 'success', 3000);
+                                await checkTokenUsage(selectedDate);
+                                await loadAvailableDates();
+                            } else {
+                                addStatusMessage(data.error || '删除失败', 'error', 3000);
+                            }
+                        } catch (error) {
+                            addStatusMessage('网络错误: ' + error.message, 'error', 3000);
+                        } finally {
+                            deleteUsageBtn.disabled = false;
+                            deleteUsageBtn.textContent = '删除';
+                        }
+                    },
+                    null,
+                    "删除用量数据"
+                );
+            });
+        }
+    }
+    
+    // 页面加载时执行自动登录
+    tryAutoLogin();
+    
     loginBtn.addEventListener('click', async function() {
         const password = passwordInput.value;
         
@@ -77,6 +195,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (response.ok) {
                 showStatus(loginStatus, '登录成功', 'success');
                 userPassword = password;
+                // 保存密码到 localStorage
+                localStorage.setItem('qwen_password', password);
+                
                 loginSection.classList.add('hidden');
                 mainSection.classList.remove('hidden');
                 checkTokenStatus();
@@ -93,80 +214,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 initCustomDatePicker();
                 loadAvailableDates();
-                
                 checkTokenUsage(todayString);
-                
-                if (queryUsageBtn) {
-                    queryUsageBtn.addEventListener('click', async function() {
-                        const selectedDate = usageDateInput.value;
-                        if (!selectedDate) {
-                            addStatusMessage('请选择日期', 'error', 3000);
-                            return;
-                        }
-                        queryUsageBtn.disabled = true;
-                        queryUsageBtn.textContent = '查询中...';
-                        try {
-                            await checkTokenUsage(selectedDate);
-                            addStatusMessage(`已加载 ${selectedDate} 的用量数据`, 'success', 3000);
-                        } catch (error) {
-                            addStatusMessage('查询失败: ' + error.message, 'error', 3000);
-                        } finally {
-                            queryUsageBtn.disabled = false;
-                            queryUsageBtn.textContent = '查询';
-                        }
-                    });
-                }
-                
-                if (deleteUsageBtn) {
-                    deleteUsageBtn.addEventListener('click', async function() {
-                        const selectedDate = usageDateInput.value;
-                        if (!selectedDate) {
-                            addStatusMessage('请选择要删除的日期', 'error', 3000);
-                            return;
-                        }
-                        
-                        showConfirmDialog(
-                            `确定要删除 ${selectedDate} 的用量数据吗？此操作不可撤销。`,
-                            async function() {
-                                deleteUsageBtn.disabled = true;
-                                deleteUsageBtn.textContent = '删除中...';
-                                try {
-                                    const response = await fetch('/api/statistics/usage', {
-                                        method: 'DELETE',
-                                        headers: {
-                                            'Content-Type': 'application/json',
-                                            'Authorization': 'Bearer ' + userPassword,
-                                        },
-                                        body: JSON.stringify({ date: selectedDate }),
-                                    });
-                                    
-                                    const data = await response.json();
-                                    
-                                    if (response.ok) {
-                                        addStatusMessage(data.message || '删除成功', 'success', 3000);
-                                        await checkTokenUsage(selectedDate);
-                                        await loadAvailableDates();
-                                    } else {
-                                        addStatusMessage(data.error || '删除失败', 'error', 3000);
-                                    }
-                                } catch (error) {
-                                    addStatusMessage('网络错误: ' + error.message, 'error', 3000);
-                                } finally {
-                                    deleteUsageBtn.disabled = false;
-                                    deleteUsageBtn.textContent = '删除';
-                                }
-                            },
-                            null,
-                            "删除用量数据"
-                        );
-                    });
-                }
+                setupEventListeners();
 
                 setTimeout(() => {
                     loginStatus.style.display = 'none';
                 }, 3000);
             } else {
                 showStatus(loginStatus, data.detail || '登录失败', 'error');
+                // 登录失败，清除可能存在的旧密码
+                localStorage.removeItem('qwen_password');
             }
         } catch (error) {
             showStatus(loginStatus, '网络错误: ' + error.message, 'error');
